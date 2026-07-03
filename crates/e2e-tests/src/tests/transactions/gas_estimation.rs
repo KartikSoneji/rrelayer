@@ -1,4 +1,6 @@
 use crate::tests::test_runner::TestRunner;
+use alloy::primitives::Uint;
+use anyhow::anyhow;
 use rrelayer_core::transaction::types::TransactionData;
 use tracing::info;
 
@@ -99,6 +101,75 @@ impl TestRunner {
         info!("  - Gas cost is within reasonable bounds");
         info!("  - Transaction completed successfully");
         info!("  - Cost efficiency validated for simple transfers");
+
+        Ok(())
+    }
+
+    /// run single with:
+    /// RRELAYER_PROVIDERS="raw" make run-test-debug TEST=transaction_gas_estimation_fails
+    /// RRELAYER_PROVIDERS="privy" make run-test-debug TEST=transaction_gas_estimation_fails  
+    /// RRELAYER_PROVIDERS="aws_secret_manager" make run-test-debug TEST=transaction_gas_estimation_fails
+    /// RRELAYER_PROVIDERS="aws_kms" make run-test-debug TEST=transaction_gas_estimation_fails
+    /// RRELAYER_PROVIDERS="gcp_secret_manager" make run-test-debug TEST=transaction_gas_estimation_fails
+    /// RRELAYER_PROVIDERS="turnkey" make run-test-debug TEST=transaction_gas_estimation_fails
+    pub async fn transaction_gas_estimation_fails(&self) -> anyhow::Result<()> {
+        info!("Testing gas estimation failing...");
+        let relayer = self.create_and_fund_relayer("gas-test-relayer").await?;
+        info!("Created relayer: {:?}", relayer);
+
+        let balance_before = self
+            .contract_interactor
+            .get_eth_balance(&relayer.address().await?.into_address())
+            .await?;
+        info!(
+            "Relayer balance before transaction: {} ETH",
+            alloy::primitives::utils::format_ether(balance_before)
+        );
+
+        info!("Sending failing transaction");
+        let failing_tx_response = self
+            .relayer_client
+            .send_transaction(
+                relayer.id(),
+                &self.config.anvil_accounts[3],
+                (balance_before * Uint::from(2)).into(),
+                TransactionData::empty(),
+            )
+            .await;
+        match failing_tx_response {
+            Err(_) => {}
+            Ok(_) => return Err(anyhow!("Transaction should fail")),
+        };
+        info!("Gas estimation failing transaction sent");
+
+        info!("Sending valid transaction");
+        let transfer_amount = alloy::primitives::utils::parse_ether("0.1")?;
+        let tx_response = self
+            .relayer_client
+            .send_transaction(
+                relayer.id(),
+                &self.config.anvil_accounts[3],
+                transfer_amount.into(),
+                TransactionData::empty(),
+            )
+            .await?;
+        info!("Gas estimation test transaction sent: {:?}", tx_response.0.id);
+
+        self.wait_for_transaction_completion(&tx_response.0.id).await?;
+        info!("Transaction completed");
+
+        let balance_after = self
+            .contract_interactor
+            .get_eth_balance(&relayer.address().await?.into_address())
+            .await?;
+        info!(
+            "Relayer balance after transaction: {} ETH",
+            alloy::primitives::utils::format_ether(balance_after)
+        );
+
+        info!("[SUCCESS] Gas estimation faliure recovery passed:");
+        info!("  - Failing transaction skipped");
+        info!("  - Subseqent valid transaction executed successfully");
 
         Ok(())
     }
